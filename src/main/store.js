@@ -24,11 +24,18 @@ const DEFAULT_SETTINGS = {
   theme: 'system',
 };
 
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Deep-merges `over` onto a fresh copy of `base`. Where `base` has a section (an object) and `over` has
+ * something else there (null, a string, ...), the section's defaults are kept, so a damaged settings
+ * file can't leave sanitizeSettings dereferencing null.
+ */
 function merge(base, over) {
-  if (!over || typeof over !== 'object' || Array.isArray(over)) return over === undefined ? base : over;
-  const out = Array.isArray(base) ? [...base] : { ...base };
+  const out = structuredClone(base);
+  if (!isPlainObject(over)) return out;
   for (const k of Object.keys(over)) {
-    out[k] = base && typeof base[k] === 'object' && !Array.isArray(base[k]) && base[k] !== null ? merge(base[k], over[k]) : over[k];
+    if (isPlainObject(base[k])) { if (isPlainObject(over[k])) out[k] = merge(base[k], over[k]); } else out[k] = over[k];
   }
   return out;
 }
@@ -52,8 +59,8 @@ function sanitizeSettings(s) {
   s.uploadSpikeMB = clampNum(s.uploadSpikeMB, 10, 1000000, d.uploadSpikeMB);
   s.quiet.enabled = !!s.quiet.enabled;
   s.quiet.thresholdMB = clampNum(s.quiet.thresholdMB, 1, 1000000, d.quiet.thresholdMB);
-  if (!/^\d{1,2}:\d{2}$/.test(s.quiet.from)) s.quiet.from = d.quiet.from;
-  if (!/^\d{1,2}:\d{2}$/.test(s.quiet.to)) s.quiet.to = d.quiet.to;
+  if (!/^\d{1,2}:\d{2}$/.test(String(s.quiet.from))) s.quiet.from = d.quiet.from;
+  if (!/^\d{1,2}:\d{2}$/.test(String(s.quiet.to))) s.quiet.to = d.quiet.to;
   s.alertCountries = [...new Set((Array.isArray(s.alertCountries) ? s.alertCountries : [])
     .map((c) => String(c).trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c)))];
   s.theme = ['system', 'light', 'dark'].includes(s.theme) ? s.theme : 'system';
@@ -115,4 +122,4 @@ class Store {
   }
 }
 
-module.exports = { Store, DEFAULT_SETTINGS, sanitizeSettings };
+module.exports = { Store, sanitizeSettings };

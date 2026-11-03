@@ -43,13 +43,16 @@ NetWatch works without them, but some features need them:
 
 | Feature | Windows | macOS | Linux |
 |---|---|---|---|
-| Connections, alerts, countries, threat lists, devices | ✓ | ✓ (own programs; `sudo` for all) | ✓ (own programs; `sudo` for all) |
+| Connections, alerts, countries, threat lists, devices | ✓ | ✓ (own programs; root for all) | ✓ (own programs; root for all) |
 | Speed and data use per program | admin | ✓ | ✓ |
 | Website names from the DNS cache | admin | – | – |
 | Block a program in the firewall | admin | – | – |
 
 On Windows, use **Restart as administrator** in the app or tray. In Settings you can make it start at login with admin
 rights (a scheduled task, so there's no prompt every time).
+
+On macOS and Linux the desktop app can't run as root (Electron refuses to), so connections of system services and other
+users appear as **Unknown process**. To see every program, run [browser mode](#browser-mode) with `sudo` instead.
 
 ## Phone alerts
 
@@ -62,7 +65,18 @@ Phone alerts send the alert text off your computer, so they're off by default.
 ## Browser mode
 
 `npm run web` runs NetWatch without the desktop window and serves the same interface at http://127.0.0.1:8790
-(local only). Useful on servers or headless machines: `sudo node src/main/web.js --port=8790`.
+(local only). Useful on servers or headless machines, and the way to monitor every process as root on macOS/Linux:
+
+```bash
+# from the source folder
+sudo node src/main/web.js --port=8790
+
+# from an installed Linux package (no Node.js needed: the app's own runtime runs it)
+sudo ELECTRON_RUN_AS_NODE=1 /opt/NetWatch/netwatch /opt/NetWatch/resources/app.asar/src/main/web.js
+
+# from the installed macOS app
+sudo ELECTRON_RUN_AS_NODE=1 /Applications/NetWatch.app/Contents/MacOS/NetWatch /Applications/NetWatch.app/Contents/Resources/app.asar/src/main/web.js
+```
 
 ## Developing
 

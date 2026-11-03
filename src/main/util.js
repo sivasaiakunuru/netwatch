@@ -150,18 +150,7 @@ function inDailyWindow(date, from, to) {
   return f < t ? now >= f && now < t : now >= f || now < t;
 }
 
-/** Runs async `fn` over items with at most `limit` in flight. */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); }
-  });
-  await Promise.all(workers);
-  return out;
-}
-
 module.exports = {
   normalizeIp, isPublicIp, ipv4ToInt, parseIpv4Cidr, ipv6Groups, ipv6High64, formatIpv6,
-  entropy, looksRandomDomain, SEVERITY_RANK, dayKey, parseClock, inDailyWindow, mapLimit,
+  entropy, looksRandomDomain, SEVERITY_RANK, dayKey, parseClock, inDailyWindow,
 };
