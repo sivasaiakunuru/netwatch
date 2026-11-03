@@ -49,7 +49,9 @@ NetWatch works without them, but some features need them:
 | Block a program in the firewall | admin | – | – |
 
 On Windows, use **Restart as administrator** in the app or tray. In Settings you can make it start at login with admin
-rights (a scheduled task, so there's no prompt every time).
+rights (a scheduled task, so there's no prompt every time). That option needs NetWatch installed **for all users**
+(Program Files): an "only for me" install can be changed by any program on your account, which would then run with
+admin rights at your next login.
 
 On macOS and Linux the desktop app can't run as root (Electron refuses to), so connections of system services and other
 users appear as **Unknown process**. To see every program, run [browser mode](#browser-mode) with `sudo` instead.
@@ -65,7 +67,11 @@ Phone alerts send the alert text off your computer, so they're off by default.
 ## Browser mode
 
 `npm run web` runs NetWatch without the desktop window and serves the same interface at http://127.0.0.1:8790
-(local only). Useful on servers or headless machines, and the way to monitor every process as root on macOS/Linux:
+(this computer only). Useful on servers or headless machines, and the way to monitor every process as root on macOS/Linux.
+
+When it starts, NetWatch prints a link containing a one-time **access key**: open that link. The key is also saved in
+`web-access.txt` in the data folder (readable only by you) and changes every time NetWatch starts. Other users on the
+same computer can reach the port, but without the key they can't see or change anything.
 
 ```bash
 # from the source folder
@@ -77,6 +83,10 @@ sudo ELECTRON_RUN_AS_NODE=1 /opt/NetWatch/netwatch /opt/NetWatch/resources/app.a
 # from the installed macOS app
 sudo ELECTRON_RUN_AS_NODE=1 /Applications/NetWatch.app/Contents/MacOS/NetWatch /Applications/NetWatch.app/Contents/Resources/app.asar/src/main/web.js
 ```
+
+On Windows, browser mode runs from the source folder (`node src/main/web.js`, from an administrator terminal for full
+detail). The installed Windows app deliberately ignores `ELECTRON_RUN_AS_NODE` and `NODE_OPTIONS`, so no other
+program can use those variables to run code inside NetWatch while it has admin rights.
 
 ## Developing
 

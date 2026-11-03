@@ -187,7 +187,10 @@ async function init() {
   updateTray();
   createWindow(!opt('hidden'));
 
-  if (opt('serve-ui')) require('./devserver').start(+opt('serve-ui'), handle, path.dirname(RENDERER));
+  if (opt('serve-ui')) {
+    const { server, token } = require('./devserver').start(+opt('serve-ui'), handle, path.dirname(RENDERER));
+    server.once('listening', () => svc.store.writePrivateText('web-access.txt', `http://127.0.0.1:${server.address().port}/#token=${token}\n`));
+  }
   if (opt('screenshot')) {
     win.once('ready-to-show', () => setTimeout(async () => {
       const img = await win.webContents.capturePage();

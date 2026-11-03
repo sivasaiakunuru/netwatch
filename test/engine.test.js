@@ -132,7 +132,7 @@ test('a fresh country database on disk is not downloaded again', async () => {
 });
 
 test('a malformed URL gets 400 and the local server keeps running', async () => {
-  const server = require('../src/main/devserver').start(0, async () => ({}), path.join(__dirname, '..', 'src', 'renderer'));
+  const { server } = require('../src/main/devserver').start(0, async () => ({}), path.join(__dirname, '..', 'src', 'renderer'));
   await new Promise((r) => server.once('listening', r));
   const { port } = server.address();
   const get = (p) => new Promise((resolve, reject) => {

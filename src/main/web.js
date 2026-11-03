@@ -43,9 +43,22 @@ async function handle(type, payload = {}) {
 }
 
 svc.start().then(() => {
-  require('./devserver').start(port, handle, path.join(__dirname, '..', 'renderer'));
-  console.log(`NetWatch is running in browser mode: http://127.0.0.1:${port}/`);
-  console.log(`Data folder: ${dataDir}${svc.monitor.admin ? '  (administrator)' : ''}`);
+  const { server, token } = require('./devserver').start(port, handle, path.join(__dirname, '..', 'renderer'));
+  server.on('error', (e) => {
+    console.error(`Could not start browser mode on port ${port}: ${e.message}`);
+    svc.stop();
+    process.exit(1);
+  });
+  server.once('listening', () => {
+    // The access key goes only to whoever started NetWatch: in this console and an owner-only file.
+    // Other users on this computer can reach the port but never see the key.
+    const url = `http://127.0.0.1:${server.address().port}/#token=${token}`;
+    svc.store.writePrivateText('web-access.txt', `${url}\n`);
+    console.log('NetWatch is running in browser mode. Open this link (it contains your access key):');
+    console.log(`  ${url}`);
+    console.log(`The link is also saved in ${path.join(dataDir, 'web-access.txt')} (readable only by you). It changes every time NetWatch starts.`);
+    console.log(`Data folder: ${dataDir}${svc.monitor.admin ? '  (administrator)' : ''}`);
+  });
 });
 
 const shutdown = () => { svc.stop(); process.exit(0); };
