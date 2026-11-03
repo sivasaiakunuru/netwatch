@@ -1,7 +1,7 @@
 'use strict';
 // Browser mode: runs NetWatch without the desktop app and serves the same interface at http://127.0.0.1:<port>.
 // Handy on headless machines or servers.  Usage: node src/main/web.js [--port=8790] [--data-dir=PATH]
-// (On Linux/macOS run it with sudo to see every process.)
+// On Linux/macOS run it with sudo to see every process (the desktop app itself can't run as root).
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -28,8 +28,11 @@ async function handle(type, payload = {}) {
     case 'export': {
       const kind = payload.kind === 'alerts' ? 'alerts' : 'usage';
       const dir = fs.existsSync(path.join(os.homedir(), 'Downloads')) ? path.join(os.homedir(), 'Downloads') : dataDir;
-      const file = path.join(dir, `netwatch-${kind}-${dayKey()}.csv`);
-      fs.writeFileSync(file, svc.csvText(kind));
+      // Never overwrite an earlier export: add -2, -3, ... when the name is taken.
+      const base = `netwatch-${kind}-${dayKey()}`;
+      let file = path.join(dir, `${base}.csv`);
+      for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${base}-${n}.csv`);
+      fs.writeFileSync(file, svc.csvText(kind), { flag: 'wx' });
       return file;
     }
     case 'openDataFolder': throw new Error(`Your data is in ${dataDir}`);

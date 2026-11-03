@@ -320,7 +320,9 @@
         html = `${ICON.INFO}<div><b>Running without admin rights.</b> ${esc(missing ? `Off until you restart as administrator: ${missing}.` : '')}</div>` +
           (state.app.canRelaunchAdmin ? '<button class="btn" data-act="relaunchAdmin">Restart as administrator</button>' : '');
       } else if (!caps.perProgram || state.platform === 'macos') {
-        html = `${ICON.INFO}<div><b>Running without root.</b> Start NetWatch with <code>sudo</code> to see the connections of system services and other users.</div>`;
+        // The desktop app can't run as root (Electron refuses), so point at browser mode instead.
+        html = `${ICON.INFO}<div><b>Running without root.</b> Connections of system services and other users show as "Unknown process". ` +
+          'To see them, run NetWatch\'s browser mode with <code>sudo</code> (see the README, "Browser mode").</div>';
       }
     }
     n.innerHTML = html;
@@ -640,8 +642,10 @@
         ${stat('Download now', s.measuring ? rate(p.rxBps || 0) : dash)}
         ${stat('Upload now', s.measuring ? rate(p.txBps || 0) : dash)}
       </div>
-      <div class="actions">${trustBtn}${blockBtn}</div>
-      <p class="action-note">${esc(blockNote || 'Trusting stops signature, risky-folder, busy-program, upload and quiet-hours alerts for this program.' + (caps.firewallSupported ? ' Blocking adds a firewall rule so it can\'t use the network.' : ''))}</p>
+      ${p.unknown
+        ? '<p class="action-note">NetWatch can\'t see which programs own these connections: they belong to system services or other users. They are grouped here, so they can\'t be trusted and get no per-program alerts. Run browser mode as root (or NetWatch as administrator on Windows) to see each program.</p>'
+        : `<div class="actions">${trustBtn}${blockBtn}</div>
+      <p class="action-note">${esc(blockNote || 'Trusting stops signature, risky-folder, busy-program, upload and quiet-hours alerts for this program.' + (caps.firewallSupported ? ' Blocking adds a firewall rule so it can\'t use the network.' : ''))}</p>`}
       <section>
         <h4>About this program</h4>
         <dl class="kv">

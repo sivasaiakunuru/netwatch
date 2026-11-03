@@ -1,6 +1,7 @@
 'use strict';
-// Test-only: serves the UI and the same request handler over http://127.0.0.1:<port> so the
-// interface can be checked in a normal browser. Started only with --serve-ui=PORT.
+// Serves the UI and the request handler over http://127.0.0.1:<port>: browser mode (web.js) and the
+// desktop app's --serve-ui=PORT test flag. Any web page can make the browser send requests here, so
+// nothing a request contains may throw outside a try/catch.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +13,14 @@ function start(port, handle, dir) {
   const token = crypto.randomBytes(16).toString('hex');
   const origins = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
   const server = http.createServer((req, res) => {
+    try {
+      route(req, res);
+    } catch {
+      if (!res.headersSent) res.writeHead(400);
+      res.end();
+    }
+  });
+  function route(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'POST' && url.pathname === '/api/call') {
       const origin = req.headers.origin;
@@ -30,7 +39,8 @@ function start(port, handle, dir) {
       return;
     }
     if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
-    const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1));
+    let rel;
+    try { rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1)); } catch { res.writeHead(400); res.end(); return; }
     const file = path.resolve(dir, rel);
     if (!file.startsWith(path.resolve(dir) + path.sep)) { res.writeHead(404); res.end(); return; }
     fs.readFile(file, (err, data) => {
@@ -39,7 +49,7 @@ function start(port, handle, dir) {
       res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
       res.end(data);
     });
-  });
+  }
   server.listen(port, '127.0.0.1');
   return server;
 }

@@ -56,6 +56,31 @@ test('ss -tinH byte counters', () => {
   assert.deepEqual(m.get('192.168.1.5|50002|1.1.1.1|853'), { rx: 8, tx: 7 });
 });
 
+test('ss -tuanpH socket owners', () => {
+  const text = `tcp   ESTAB  0      0      192.168.1.5:43210     93.184.216.34:443   users:(("firefox",pid=2345,fd=87))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53      0.0.0.0:*           users:(("systemd-resolve",pid=611,fd=14))
+tcp   LISTEN 0      128    [::]:22               [::]:*
+udp   UNCONN 0      0      0.0.0.0:5353          0.0.0.0:*           users:(("avahi-daemon",pid=612,fd=12),("avahi-daemon",pid=612,fd=13))
+tcp   ESTAB  0      0      [::ffff:192.168.1.5]:50002 [::ffff:1.1.1.1]:853 users:(("resolved",pid=700,fd=3))
+`;
+  const m = P.parseSsProcesses(text);
+  assert.equal(m.get('tcp|192.168.1.5|43210|93.184.216.34|443'), 2345);
+  assert.equal(m.get('tcp|L|53'), 611);
+  assert.equal(m.has('tcp|L|22'), false, 'sockets without a visible owner are left out');
+  assert.equal(m.get('udp|L|5353'), 612);
+  assert.equal(m.get('tcp|192.168.1.5|50002|1.1.1.1|853'), 700, 'IPv4-mapped addresses match /proc parsing');
+});
+
+test('threat feed parsing skips private space and merges ranges', () => {
+  const { parseFeed, inRanges } = require('../src/main/intel');
+  const ranges = parseFeed('# comment\n10.0.0.0/8\n1.2.3.0/24\n1.2.3.128/25\n5.6.7.8\n{"cidr":"9.9.9.0/24","sblid":"x"}\n{"type":"metadata"}\n');
+  assert.equal(ranges.length, 3);
+  assert.equal(inRanges(ranges, U.ipv4ToInt('1.2.3.200')), true);
+  assert.equal(inRanges(ranges, U.ipv4ToInt('5.6.7.8')), true);
+  assert.equal(inRanges(ranges, U.ipv4ToInt('9.9.9.1')), true);
+  assert.equal(inRanges(ranges, U.ipv4ToInt('10.1.1.1')), false, 'private ranges are dropped');
+});
+
 test('macOS lsof -F output', () => {
   const text = ['p501', 'cSafari', 'f23', 'PTCP', 'n192.168.1.5:50123->17.253.144.10:443', 'TST=ESTABLISHED', 'TQR=0',
     'f24', 'PUDP', 'n*:5353', 'p88', 'cmDNSResponder', 'f5', 'PTCP', 'n*:7000', 'TST=LISTEN',

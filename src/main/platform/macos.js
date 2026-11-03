@@ -1,6 +1,6 @@
 'use strict';
 // macOS collector: lsof for sockets, ps for processes, nettop for per-process bytes, codesign for signatures.
-// Run as root (sudo) to see the sockets of system services.
+// Without root, lsof only lists this user's sockets; browser mode run with sudo sees system services too.
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
@@ -20,7 +20,7 @@ module.exports = {
   firewall: { supported: false },
   async sample() {
     const [lsof, ps, nettop, netstat] = await Promise.all([
-      run('lsof', ['-nP', '-iTCP', '-iUDP', '-FpcPnT']),
+      run('lsof', ['+c', '0', '-nP', '-iTCP', '-iUDP', '-FpcPnT']), // +c 0: full command names, not 15 characters
       run('ps', ['-axo', 'pid=,ppid=,comm=']),
       run('nettop', ['-P', '-L', '1', '-x', '-J', 'bytes_in,bytes_out']),
       run('netstat', ['-ibn']),

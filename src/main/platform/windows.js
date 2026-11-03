@@ -205,13 +205,22 @@ function readProcesses() {
 
 // ---------- adapter totals ----------
 
+// koffi registers every type it creates, so array types are reused per length instead of made per scan.
+// The adapter count rarely changes, so this stays tiny.
+const byteArrayTypes = new Map();
+function byteArray(len) {
+  let t = byteArrayTypes.get(len);
+  if (!t) { t = koffi.array('uint8', len, 'Typed'); byteArrayTypes.set(len, t); }
+  return t;
+}
+
 function readTotals() {
   const holder = [null];
   if (IF_ROW.size !== 1352 || GetIfTable2(holder) !== 0 || !holder[0]) return null;
   try {
     const n = koffi.decode(holder[0], 'uint32');
     // Copy the table out: Electron forbids JS buffers that point at native memory (koffi.view would crash it).
-    const bytes = koffi.decode(holder[0], koffi.array('uint8', 8 + n * IF_ROW.size, 'Typed'));
+    const bytes = koffi.decode(holder[0], byteArray(8 + n * IF_ROW.size));
     const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     let rx = 0, tx = 0;
     for (let i = 0; i < n; i++) {
@@ -257,10 +266,24 @@ function parseJsonArray(text) {
   return Array.isArray(v) ? v : [v];
 }
 
+// The encoded PowerShell command must stay under Windows' 32,767-character command-line limit
+// (it grows to about 3.6x the paths' JSON), so batches are capped by size as well as count.
+const MAX_BATCH_JSON_BYTES = 6000;
+function signatureBatches(paths) {
+  const batches = [];
+  let cur = [];
+  for (const p of paths) {
+    if (cur.length && (cur.length >= 40 || Buffer.byteLength(JSON.stringify([...cur, p])) > MAX_BATCH_JSON_BYTES)) { batches.push(cur); cur = []; }
+    cur.push(p);
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+
+/** Signature status and signer per path. Paths whose check failed are left out so the caller can retry them. */
 async function signatures(paths) {
   const out = new Map();
-  for (let i = 0; i < paths.length; i += 40) {
-    const batch = paths.slice(i, i + 40);
+  for (const batch of signatureBatches(paths)) {
     const script = `$paths = ${psString(JSON.stringify(batch))} | ConvertFrom-Json
 $out = foreach ($p in $paths) {
   try {
@@ -273,7 +296,7 @@ $out = foreach ($p in $paths) {
 ConvertTo-Json -Compress -InputObject @($out)`;
     try {
       for (const r of parseJsonArray(await runPowerShell(script, 60000))) out.set(r.path, { status: r.status || 'Unknown', signer: r.signer || '' });
-    } catch { for (const p of batch) out.set(p, { status: 'Unknown', signer: '' }); }
+    } catch { /* this batch is left out; the monitor retries it later */ }
   }
   return out;
 }
@@ -324,6 +347,7 @@ module.exports = {
   systemPrefixes: [(env.SystemRoot || 'C:\\Windows').replace(/\\+$/, '') + '\\'],
   signatureSupported: true,
   dnsSupported: true,
+  dnsNeedsAdmin: true, // reading the DNS client cache needs elevation on current Windows builds
   firewall,
   async sample() {
     const tcp = readTcp();

@@ -17,6 +17,12 @@ const SUSPICIOUS_PORTS = {
 const BAD_SIGNATURES = new Set(['NotSigned', 'HashMismatch', 'NotTrusted', 'UnknownError']);
 const RISK_RANK = { '': 0, MEDIUM: 2, HIGH: 3 };
 const HOUR = 3600e3, DAY = 24 * HOUR, MB = 1024 * 1024, GB = 1024 * MB;
+const SIG_RETRY_MS = 10 * 60e3;          // retry a signature check that failed
+const DNS_MAX_AGE_MS = 15 * 60e3;        // forget an address->name pair the DNS cache stopped listing
+const DEVICE_NAME_RETRY_MS = 6 * HOUR;   // retry a device name lookup that found nothing
+// Sockets whose owning process can't be seen (other users' processes without root). Kept apart from real
+// programs: it can't be trusted and gets no per-program alerts, since it lumps unrelated processes together.
+const UNKNOWN_PROGRAM = 'Unknown process';
 
 const fmtBytes = (b) => (b >= GB ? `${(b / GB).toFixed(1)} GB` : b >= MB ? `${(b / MB).toFixed(0)} MB` : `${Math.round(b / 1024)} KB`);
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
@@ -55,6 +61,7 @@ class Monitor extends EventEmitter {
     this.alerted = new Set();
     this.sigCache = new Map();
     this.sigQueue = new Set();
+    this.sigFailed = new Map(); // path -> when its check last failed
     this.hostCache = new Map();
     this.dnsMap = new Map();
     this.dnsSeen = new Set();
@@ -129,6 +136,7 @@ class Monitor extends EventEmitter {
   }
 
   isTrusted(name, path) {
+    if (name === UNKNOWN_PROGRAM) return false; // stands for many unrelated processes; never trustable
     return (!!path && this.trusted.has(path.toLowerCase())) || this.trusted.has(String(name).toLowerCase());
   }
 
@@ -148,11 +156,15 @@ class Monitor extends EventEmitter {
     if (!this.platform.signatureSupported || !this.sigQueue.size || this.sigBusy) return;
     this.sigBusy = true;
     const batch = [...this.sigQueue].slice(0, 40);
-    try {
-      const res = await this.platform.signatures(batch);
-      for (const p of batch) { this.sigCache.set(p, res.get(p) || { status: 'Unknown', signer: '' }); this.sigQueue.delete(p); }
-    } catch { batch.forEach((p) => { this.sigCache.set(p, { status: 'Unknown', signer: '' }); this.sigQueue.delete(p); }); }
-    finally { this.sigBusy = false; }
+    let res = new Map();
+    try { res = await this.platform.signatures(batch); } catch { /* the whole batch is retried later */ }
+    // A path with no result (the check itself failed) is retried later instead of being cached as Unknown.
+    for (const p of batch) {
+      this.sigQueue.delete(p);
+      const r = res.get(p);
+      if (r) { this.sigCache.set(p, r); this.sigFailed.delete(p); } else this.sigFailed.set(p, Date.now());
+    }
+    this.sigBusy = false;
   }
 
   signature(path) {
@@ -160,18 +172,28 @@ class Monitor extends EventEmitter {
     if (!this.platform.signatureSupported) return { status: 'n/a', signer: '' };
     const s = this.sigCache.get(path);
     if (s) return s;
+    const failedAt = this.sigFailed.get(path);
+    if (failedAt && Date.now() - failedAt < SIG_RETRY_MS) return { status: 'Unknown', signer: '' };
     this.sigQueue.add(path);
     return { status: 'Checking', signer: '' };
   }
 
+  /** Whether the system DNS cache can be read right now (on Windows it needs admin rights). */
+  dnsUsable() {
+    return this.settings.dns.enabled && !!this.platform.dnsSupported && (!this.platform.dnsNeedsAdmin || this.admin);
+  }
+
   async refreshDns() {
-    if (!this.settings.dns.enabled || !this.platform.dnsSupported || this.dnsBusy) return;
+    if (!this.dnsUsable()) { this.dnsMap.clear(); return; }
+    if (this.dnsBusy) return;
     this.dnsBusy = true;
     try {
       const map = await this.platform.dnsCache();
-      if (map && map.size) for (const [ip, name] of map) this.dnsMap.set(ip, name);
-      if (this.dnsMap.size > 20000) this.dnsMap = new Map([...this.dnsMap].slice(-10000));
-    } catch { /* not available, e.g. needs admin */ } finally { this.dnsBusy = false; }
+      const now = Date.now();
+      if (map) for (const [ip, name] of map) this.dnsMap.set(ip, { name, t: now });
+      // Forget names the cache stopped listing: shared CDN addresses get reused for other sites.
+      for (const [ip, e] of this.dnsMap) if (now - e.t > DNS_MAX_AGE_MS) this.dnsMap.delete(ip);
+    } catch { /* cache unavailable this time */ } finally { this.dnsBusy = false; }
   }
 
   async refreshDevices() {
@@ -191,7 +213,11 @@ class Monitor extends EventEmitter {
         }
         d.ip = ip;
         d.lastSeen = now;
-        if (!d.name) withTimeout(dns.reverse(ip), 4000).then((n) => { if (n[0]) d.name = n[0]; }).catch(() => {});
+        // Many routers publish no names, so a failed lookup is only retried every few hours.
+        if (!d.name && !(d.nameTriedAt > now - DEVICE_NAME_RETRY_MS)) {
+          d.nameTriedAt = now;
+          withTimeout(dns.reverse(ip), 4000).then((n) => { if (n[0]) d.name = n[0]; }).catch(() => {});
+        }
       }
       this.devicesLearned = true;
     } catch { /* arp unavailable */ } finally { this.lanBusy = false; }
@@ -207,9 +233,20 @@ class Monitor extends EventEmitter {
 
   // ---------- the scan ----------
 
-  async scan() {
-    if (this.scanning) return;
-    this.scanning = true;
+  /**
+   * Runs a scan. If one is already running, waits for it and then runs a fresh one, so a caller
+   * (e.g. an action that just changed a rule) always gets state that includes its change.
+   */
+  scan() {
+    if (!this.scanPromise) {
+      this.scanPromise = this.runScan().finally(() => { this.scanPromise = null; });
+      return this.scanPromise;
+    }
+    if (!this.nextScan) this.nextScan = this.scanPromise.then(() => { this.nextScan = null; return this.scan(); });
+    return this.nextScan;
+  }
+
+  async runScan() {
     try {
       const s = await this.platform.sample();
       this.process(s);
@@ -217,7 +254,6 @@ class Monitor extends EventEmitter {
     } catch (e) {
       this.lastError = `Scan failed: ${e.message || e}`;
     } finally {
-      this.scanning = false;
       this.emit('state');
     }
   }
@@ -235,7 +271,7 @@ class Monitor extends EventEmitter {
     const hourKey = now - (now % HOUR);
 
     const established = s.tcp.filter((c) => c.state === 'ESTABLISHED' && U.isPublicIp(c.remoteIp));
-    const proc = (pid) => s.procs.get(pid) || { name: pid ? `PID ${pid}` : 'System', path: null, ppid: 0 };
+    const proc = (pid) => s.procs.get(pid) || { name: pid ? `PID ${pid}` : UNKNOWN_PROGRAM, path: null, ppid: 0 };
     const rows = [];
     const newBytes = new Map();
     const seenKeys = new Set();
@@ -277,14 +313,15 @@ class Monitor extends EventEmitter {
         this.alert('MEDIUM', `country|${name}|${country}`, `${who} connected to ${remote} in a country on your watch list (${country})`, name);
         flags.push(`Country on your watch list (${country})`); raise('MEDIUM');
       }
-      const domain = this.dnsMap.get(remoteIp) || '';
+      const dnsEntry = this.dnsMap.get(remoteIp);
+      const domain = dnsEntry ? dnsEntry.name : '';
       if (domain && st.dns.flagRandomDomains && !trusted && U.looksRandomDomain(domain) && !this.dnsSeen.has(domain)) {
         this.dnsSeen.add(domain);
         this.alert('LOW', `dga|${domain}`, `${name} connected to a random-looking domain: ${domain} (${remote}). Some malware generates names like this.`, name);
       }
 
       const appKey = (path || name).toLowerCase();
-      if (!this.knownApps.has(appKey)) {
+      if (name !== UNKNOWN_PROGRAM && !this.knownApps.has(appKey)) {
         const knownByName = this.knownApps.has(name.toLowerCase());
         this.knownApps.add(appKey);
         if (!this.learning && !knownByName) this.alert('LOW', `new|${appKey}`, `New program online for the first time: ${who} -> ${remote}`, name);
@@ -386,7 +423,9 @@ class Monitor extends EventEmitter {
     for (const p of programs.values()) {
       const firstPath = [...p.paths][0] || null;
       const trusted = this.isTrusted(p.name, firstPath) || [...p.paths].some((x) => this.trusted.has(x.toLowerCase()));
-      if (p.conns > st.floodThreshold && !trusted) {
+      const unknown = p.name === UNKNOWN_PROGRAM;
+      const judge = !trusted && !unknown; // per-program rules only make sense for one real program
+      if (p.conns > st.floodThreshold && judge) {
         this.alert('MEDIUM', `flood|${p.name}|${Math.floor(p.conns / 100)}`, `${p.name} has ${p.conns} open internet connections (possible scan or bot activity)`, p.name);
       }
       const used = dayUsage[p.name];
@@ -399,7 +438,7 @@ class Monitor extends EventEmitter {
         win.push([now, dTx]);
         this.upWindows.set(p.name, win);
         const sum10 = win.reduce((a, w) => a + w[1], 0);
-        if (!trusted && sum10 > st.uploadSpikeMB * MB) {
+        if (judge && sum10 > st.uploadSpikeMB * MB) {
           const past = Object.entries(hours).filter(([h]) => +h < hourKey).map(([, v]) => v);
           const typical10 = past.length >= 6 ? past.reduce((a, v) => a + v, 0) / past.length / 6 : 0;
           if (past.length < 6 || sum10 > 5 * typical10) {
@@ -407,7 +446,7 @@ class Monitor extends EventEmitter {
           }
         }
       }
-      if (quietNow && dAll > 0 && !trusted) {
+      if (quietNow && dAll > 0 && judge) {
         const q = (this.quiet.perProgram.get(p.name) || 0) + dAll;
         this.quiet.perProgram.set(p.name, q);
         if (q > st.quiet.thresholdMB * MB) {
@@ -476,6 +515,7 @@ class Monitor extends EventEmitter {
           parent: parentPid ? { pid: parentPid, name: proc(parentPid).name } : null,
           trustKey: paths.length === 1 ? paths[0].toLowerCase() : p.name.toLowerCase(),
           trusted: p.trusted,
+          unknown: p.name === UNKNOWN_PROGRAM,
           blocked: paths.some((x) => this.blocked.has(x.toLowerCase())),
         };
       }),
@@ -530,7 +570,7 @@ class Monitor extends EventEmitter {
         firewall: !!this.platform.firewall.supported && this.admin,
         firewallSupported: !!this.platform.firewall.supported,
         signatures: !!this.platform.signatureSupported,
-        dns: !!this.platform.dnsSupported && (this.platform.name !== 'windows' || this.admin) && this.settings.dns.enabled,
+        dns: this.dnsUsable(),
         dnsSupported: !!this.platform.dnsSupported,
       },
       snapshot: snap && {
@@ -575,6 +615,7 @@ class Monitor extends EventEmitter {
       case 'trust': {
         const key = String(payload.key || '').toLowerCase();
         if (!key) throw new Error('Missing program.');
+        if (key === UNKNOWN_PROGRAM.toLowerCase()) throw new Error('Connections of unknown processes can\'t be trusted.');
         if (payload.trusted) this.trusted.add(key); else this.trusted.delete(key);
         break;
       }
@@ -636,4 +677,4 @@ class Monitor extends EventEmitter {
   }
 }
 
-module.exports = { Monitor, SUSPICIOUS_PORTS };
+module.exports = { Monitor };

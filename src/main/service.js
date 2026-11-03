@@ -130,8 +130,9 @@ function createService(o) {
   }
 
   async function start() {
+    // Load the saved country database while the first scan runs; the monitor's feed update waits for it.
+    geo.ensureLoaded().then(() => monitor.emit('state')).catch(() => {});
     await monitor.start();
-    geo.load().then(() => { monitor.emit('state'); return geo.update(false); }).then(() => monitor.emit('state')).catch(() => {});
   }
 
   return {

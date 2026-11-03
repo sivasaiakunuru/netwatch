@@ -1,6 +1,6 @@
 'use strict';
-// Linux collector: everything comes from /proc plus `ss` for per-connection byte counters.
-// Run as root to see the processes of other users.
+// Linux collector: sockets and totals from /proc, socket owners and per-connection byte counters from `ss`.
+// Without root, sockets of other users' processes have no visible owner (the monitor shows them as "Unknown process").
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -11,22 +11,6 @@ const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return 
 const run = (cmd, args) => new Promise((resolve) => {
   execFile(cmd, args, { timeout: 15000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout) => resolve(err ? '' : String(stdout)));
 });
-
-/** socket inode -> pid, by walking /proc/<pid>/fd (only our own processes unless running as root). */
-function socketOwners() {
-  const owners = new Map();
-  for (const pid of fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
-    let fds;
-    try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; }
-    for (const fd of fds) {
-      try {
-        const m = /^socket:\[(\d+)\]$/.exec(fs.readlinkSync(`/proc/${pid}/fd/${fd}`));
-        if (m) owners.set(m[1], +pid);
-      } catch { /* fd closed meanwhile */ }
-    }
-  }
-  return owners;
-}
 
 let procCache = new Map();
 function processInfo(pid) {
@@ -48,15 +32,21 @@ module.exports = {
   dnsSupported: false,
   firewall: { supported: false },
   async sample() {
-    const owners = socketOwners();
+    // `ss` finds socket owners in native code without blocking the app (a JS walk of every /proc/<pid>/fd
+    // costs tens of thousands of synchronous syscalls per scan on a busy desktop).
+    const [ssProcText, ssInfoText] = await Promise.all([run('ss', ['-tuanpH']), run('ss', ['-tinH', 'state', 'established'])]);
+    const owners = P.parseSsProcesses(ssProcText);
+    const ownerOf = (proto, r) => (r.remoteIp ? owners.get(`${proto}|${r.localIp}|${r.localPort}|${r.remoteIp}|${r.remotePort}`) : 0)
+      || owners.get(`${proto}|L|${r.localPort}`) || 0;
     const tcp = [
       ...P.parseProcNetTcp(read('/proc/net/tcp')),
       ...P.parseProcNetTcp(read('/proc/net/tcp6')),
-    ].filter((r) => r.state === 'ESTABLISHED' || r.state === 'LISTEN').map((r) => ({ ...r, pid: owners.get(r.inode) || 0 }));
+    ].filter((r) => r.state === 'ESTABLISHED' || r.state === 'LISTEN')
+      .map((r) => ({ ...r, pid: ownerOf('tcp', r.state === 'ESTABLISHED' ? r : { localIp: r.localIp, localPort: r.localPort }) }));
     const udp = [
       ...P.parseProcNetUdp(read('/proc/net/udp')),
       ...P.parseProcNetUdp(read('/proc/net/udp6')),
-    ].map((r) => ({ ...r, pid: owners.get(r.inode) || 0 }));
+    ].map((r) => ({ ...r, pid: ownerOf('udp', r) }));
 
     const procs = new Map();
     for (const pid of new Set([...tcp, ...udp].map((r) => r.pid).filter(Boolean))) {
@@ -66,7 +56,7 @@ module.exports = {
     procCache = procs;
 
     // ss reports bytes per socket for every user; key them the same way the monitor does.
-    const ss = P.parseSsTcpInfo(await run('ss', ['-tinH', 'state', 'established']));
+    const ss = P.parseSsTcpInfo(ssInfoText);
     const connBytes = new Map();
     for (const r of tcp) {
       if (r.state !== 'ESTABLISHED') continue;

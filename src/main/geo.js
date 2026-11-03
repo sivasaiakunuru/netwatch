@@ -61,6 +61,12 @@ class Geo {
     return { starts: starts.subarray(0, n), ends: ends.subarray(0, n), cc: cc.subarray(0, n) };
   }
 
+  /** Loads the saved database once; every caller (update() included) waits for that same load. */
+  ensureLoaded() {
+    if (!this.loading) this.loading = this.load();
+    return this.loading;
+  }
+
   async load() {
     try { this.meta = JSON.parse(fs.readFileSync(path.join(this.dir, 'meta.json'), 'utf8')); } catch { this.meta = {}; }
     try {
@@ -74,10 +80,13 @@ class Geo {
   }
 
   async update(force = false) {
-    if (!this.getSettings().geo.enabled || this.state === 'downloading') return false;
-    if (!force && this.v4 && this.meta.updatedAt && Date.now() - this.meta.updatedAt < MAX_AGE_MS) return false;
-    this.state = 'downloading';
+    if (!this.getSettings().geo.enabled || this.updating) return false;
+    this.updating = true;
     try {
+      // Judge freshness from the copy on disk, never from the empty state before it has loaded.
+      await this.ensureLoaded();
+      if (!force && this.v4 && this.meta.updatedAt && Date.now() - this.meta.updatedAt < MAX_AGE_MS) return false;
+      this.state = 'downloading';
       for (const file of Object.values(FILES)) {
         const res = await fetch(`${BASE}/${file}`, { signal: AbortSignal.timeout(180000) });
         if (!res.ok) throw new Error(`HTTP ${res.status} for ${file}`);
@@ -87,12 +96,15 @@ class Geo {
       this.meta = { updatedAt: Date.now() };
       fs.writeFileSync(path.join(this.dir, 'meta.json'), JSON.stringify(this.meta));
       this.error = '';
-      await this.load();
+      this.loading = this.load();
+      await this.loading;
       return true;
     } catch (e) {
       this.error = e.message || String(e);
       this.state = this.v4 ? 'ready' : 'error';
       return false;
+    } finally {
+      this.updating = false;
     }
   }
 

@@ -99,6 +99,28 @@ function parseSsTcpInfo(text) {
   return out;
 }
 
+/**
+ * `ss -tuanpH` (all TCP/UDP sockets with their owning process). Returns Map with two kinds of keys:
+ *   "proto|localIp|localPort|remoteIp|remotePort" -> pid   for connected sockets
+ *   "proto|L|localPort" -> pid                             for any socket bound to that local port
+ * Sockets without a visible owner (other users' processes, without root) are left out.
+ */
+function parseSsProcesses(text) {
+  const out = new Map();
+  for (const line of text.split('\n')) {
+    const t = line.trim().split(/\s+/);
+    if (t.length < 7) continue;
+    const pid = /pid=(\d+)/.exec(t.slice(6).join(' '));
+    if (!pid) continue;
+    const proto = t[0].startsWith('udp') ? 'udp' : t[0].startsWith('tcp') ? 'tcp' : '';
+    if (!proto) continue;
+    const l = splitHostPort(t[4]), r = splitHostPort(t[5]);
+    if (Number.isFinite(r.port)) out.set(`${proto}|${l.ip}|${l.port}|${r.ip}|${r.port}`, +pid[1]);
+    if (!out.has(`${proto}|L|${l.port}`)) out.set(`${proto}|L|${l.port}`, +pid[1]);
+  }
+  return out;
+}
+
 // ---------- macOS ----------
 
 /**
@@ -208,6 +230,6 @@ function isRandomMac(mac) {
 }
 
 module.exports = {
-  parseProcNetTcp, parseProcNetUdp, parseProcNetDev, parseProcStatPpid, parseSsTcpInfo,
+  parseProcNetTcp, parseProcNetUdp, parseProcNetDev, parseProcStatPpid, parseSsTcpInfo, parseSsProcesses,
   parseLsof, parseNettop, parseNetstatIbn, parsePs, parseArp, normalizeMac, isRandomMac, splitHostPort,
 };
