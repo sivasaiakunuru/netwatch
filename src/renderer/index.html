@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+<title>NetWatch</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+      <h1>NetWatch</h1>
+    </div>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">Starting…</span></div>
+    <button class="btn" id="snoozeBtn" data-act="snooze">Pause alerts</button>
+  </header>
+
+  <nav class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="devices">Devices <span class="count" id="devCount"></span></button>
+    <button role="tab" data-tab="reports">Reports</button>
+    <button role="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <div class="notice" id="capNotice" hidden></div>
+
+  <!-- ===== Overview ===== -->
+  <main id="tab-overview" role="tabpanel">
+    <section class="tiles" aria-label="Summary">
+      <div class="tile"><div class="tile-label">Internet connections</div><div class="tile-value" id="tConns">–</div><div class="tile-sub" id="tConnsSub">&nbsp;</div></div>
+      <div class="tile"><div class="tile-label">Download</div><div class="tile-value" id="tRx">–</div><div class="tile-sub" id="tRxSub">&nbsp;</div></div>
+      <div class="tile"><div class="tile-label">Upload</div><div class="tile-value" id="tTx">–</div><div class="tile-sub" id="tTxSub">&nbsp;</div></div>
+      <div class="tile"><div class="tile-label">Data used today</div><div class="tile-value" id="tToday">–</div><div class="tile-sub" id="tTodaySub">&nbsp;</div></div>
+      <div class="tile"><div class="tile-label">Open listening ports</div><div class="tile-value" id="tListen">–</div><div class="tile-sub" id="tListenSub">&nbsp;</div></div>
+      <div class="tile"><div class="tile-label">Alerts in the last 24 hours</div><div class="alert-counts" id="tAlerts"></div></div>
+    </section>
+
+    <div class="toolbar">
+      <h2>Activity</h2>
+      <div class="seg" role="group" aria-label="Time range" id="range">
+        <button data-min="5">5 min</button><button data-min="15">15 min</button><button data-min="60">1 hour</button><button data-min="360">6 hours</button><button data-min="1440">24 hours</button>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head">
+          <h3>Network speed</h3>
+          <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Download</span><span><i class="sw" style="background:var(--s2)"></i>Upload</span></div>
+        </div>
+        <div class="chart" id="speedChart"></div>
+      </div>
+      <div class="card"><h3>Internet connections</h3><div class="chart" id="connChart"></div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head">
+          <h3>Alerts</h3>
+          <div class="seg" role="group" aria-label="Alert filter" id="alertFilter">
+            <button data-sev="ALL">All</button><button data-sev="HIGH">High</button><button data-sev="MEDIUM">Medium</button><button data-sev="LOW">Low</button>
+          </div>
+        </div>
+        <div class="feed" id="alerts"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Programs</h3>
+          <div class="seg" role="group" aria-label="Measure programs by" id="metric">
+            <button data-metric="conns">Connections</button><button data-metric="rx">Download</button><button data-metric="tx">Upload</button><button data-metric="today">Today</button>
+          </div>
+        </div>
+        <p class="hint">Click a program for details, trust and block.</p>
+        <div class="bars" id="bars"></div>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <h3>Live connections</h3>
+        <input class="input" id="search" type="search" placeholder="Search program, website, IP or country" aria-label="Search connections">
+        <label class="check"><input type="checkbox" id="onlyFlagged"> Flagged only</label>
+      </div>
+      <div class="table-wrap"><table><thead><tr id="connHead"></tr></thead><tbody id="connRows"></tbody></table></div>
+      <div class="table-foot" id="connFoot"></div>
+    </section>
+
+    <section class="card">
+      <h3>Listening ports</h3>
+      <p class="hint">Programs waiting for incoming connections from other devices on your network.</p>
+      <div class="table-wrap"><table><thead><tr><th>Program</th><th>Port</th><th>Address</th><th>PID</th><th></th></tr></thead><tbody id="listenRows"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h3>Your rules</h3>
+      <div class="rules">
+        <div>
+          <h4>Trusted programs</h4>
+          <p class="hint">No signature, risky-folder, busy-program, upload or quiet-hours alerts for these.</p>
+          <ul class="rule-list" id="ruleTrusted"></ul>
+        </div>
+        <div>
+          <h4>Blocked in the firewall</h4>
+          <p class="hint">These programs can't use the network at all.</p>
+          <ul class="rule-list" id="ruleBlocked"></ul>
+        </div>
+        <div>
+          <h4>Blocklisted addresses</h4>
+          <p class="hint">Any connection to these raises a High alert.</p>
+          <ul class="rule-list" id="ruleBlocklist"></ul>
+          <form class="add-row" id="addIpForm">
+            <input class="input" id="addIp" placeholder="Add an IP address" aria-label="IP address to blocklist" autocomplete="off">
+            <button class="btn" type="submit">Add</button>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Devices ===== -->
+  <main id="tab-devices" role="tabpanel" hidden>
+    <section class="card">
+      <div class="card-head"><h3>Devices on your network</h3></div>
+      <p class="hint">Phones, TVs, routers and computers your PC has recently exchanged data with on the local network. Click a name to rename it.</p>
+      <div class="table-wrap"><table><thead><tr><th>Device</th><th>IP address</th><th>Hardware address</th><th>First seen</th><th>Last seen</th><th></th></tr></thead><tbody id="devRows"></tbody></table></div>
+    </section>
+  </main>
+
+  <!-- ===== Reports ===== -->
+  <main id="tab-reports" role="tabpanel" hidden>
+    <div class="toolbar">
+      <h2>Reports</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="seg" role="group" aria-label="Report period" id="repRange"><button data-days="7">7 days</button><button data-days="30">30 days</button></div>
+        <button class="btn" data-act="export" data-kind="usage">Export data usage (CSV)</button>
+        <button class="btn" data-act="export" data-kind="alerts">Export alerts (CSV)</button>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head">
+          <h3>Data used per day</h3>
+          <div class="legend"><span><i class="sw box" style="background:var(--s1)"></i>Downloaded</span><span><i class="sw box" style="background:var(--s2)"></i>Uploaded</span></div>
+        </div>
+        <div class="chart" id="dailyChart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Average speed per hour</h3>
+          <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Download</span><span><i class="sw" style="background:var(--s2)"></i>Upload</span></div>
+        </div>
+        <div class="chart" id="hourChart"></div>
+      </div>
+    </div>
+    <section class="card">
+      <h3 id="topTitle">Programs that used the most data</h3>
+      <div class="table-wrap"><table><thead><tr><th>Program</th><th class="r">Downloaded</th><th class="r">Uploaded</th><th class="r">Total</th><th style="width:30%"></th></tr></thead><tbody id="topRows"></tbody></table></div>
+      <p class="hint" id="topHint" style="margin-top:10px"></p>
+    </section>
+  </main>
+
+  <!-- ===== Settings ===== -->
+  <main id="tab-settings" role="tabpanel" hidden>
+    <form id="settingsForm" autocomplete="off"></form>
+  </main>
+
+  <footer id="foot"></footer>
+</div>
+
+<div class="tip" id="tip" hidden></div>
+<div class="backdrop" id="backdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Program details" role="dialog"></aside>
+<div class="toast" id="toast" hidden role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>
