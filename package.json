@@ -1,0 +1,66 @@
+{
+  "name": "netwatch",
+  "productName": "NetWatch",
+  "version": "1.0.0",
+  "description": "Watches your computer's internet traffic and alerts you when something looks wrong.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "web": "node src/main/web.js",
+    "test": "node --test test/",
+    "icons": "node scripts/make-icons.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "keywords": ["network", "monitor", "security", "firewall"],
+  "author": "NetWatch",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "koffi": "^3.3.6"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  },
+  "allowScripts": {
+    "koffi@3.3.6": true,
+    "electron-winstaller": false
+  },
+  "build": {
+    "appId": "com.netwatch.app",
+    "productName": "NetWatch",
+    "copyright": "NetWatch",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "package.json"],
+    "asarUnpack": ["node_modules/koffi/**"],
+    "npmRebuild": false,
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NetWatch",
+      "runAfterFinish": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Network",
+      "icon": "build/icon.png",
+      "maintainer": "NetWatch <netwatch@localhost>",
+      "synopsis": "Network traffic monitor with alerts"
+    }
+  }
+}
