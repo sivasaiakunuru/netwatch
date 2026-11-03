@@ -8,14 +8,26 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
   };
 
-  // In the app the preload script provides window.netwatch; in a test browser we talk to the dev server.
+  // In the app the preload script provides window.netwatch; in browser mode we talk to the local server.
+  const NO_KEY = 'Open NetWatch with the link it printed when it started: the link contains your access key.';
   const bridge = window.netwatch || (() => {
-    const meta = document.querySelector('meta[name="nw-dev-token"]');
-    const token = meta ? meta.content : '';
+    // The access key arrives in the link NetWatch printed (#token=...). It is kept for this tab only and
+    // removed from the address bar so it doesn't linger in history or get copied along with the URL.
+    let token = '';
+    const m = /(?:^#|&)token=([0-9a-f]+)/.exec(location.hash);
+    if (m) {
+      token = m[1];
+      try { sessionStorage.setItem('nw.token', token); } catch { /* storage unavailable: key lives in memory */ }
+      history.replaceState(null, '', location.pathname + location.search);
+    } else {
+      try { token = sessionStorage.getItem('nw.token') || ''; } catch { /* storage unavailable */ }
+    }
     const call = async (type, payload) => {
       if (type === 'openExternal') { window.open(payload.url, '_blank', 'noopener'); return { ok: true, result: true }; }
+      if (!token) return { ok: false, error: NO_KEY };
       try {
         const r = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-NetWatch-Token': token }, body: JSON.stringify({ type, payload }) });
+        if (r.status === 403) return { ok: false, error: `${NO_KEY} (NetWatch makes a new key each time it starts.)` };
         return await r.json();
       } catch (e) { return { ok: false, error: 'NetWatch is not running.' }; }
     };
@@ -780,7 +792,7 @@
         <section class="card">
           <h3>General</h3>
           ${state.app.desktop ? field('Start NetWatch when you log in', chk('autostart', s.autostart), 'It starts quietly in the tray.') : ''}
-          ${state.app.desktop && win ? field('…with administrator rights', chk('autostartAdmin', s.autostartAdmin), 'Uses a Windows scheduled task, so there is no permission prompt at every login. Needs NetWatch to be running as administrator when you turn it on.') : ''}
+          ${state.app.desktop && win ? field('…with administrator rights', chk('autostartAdmin', s.autostartAdmin), 'Uses a Windows scheduled task, so there is no permission prompt at every login. Needs NetWatch installed for all users (in Program Files) and running as administrator when you turn it on.') : ''}
           ${field('Theme', `<select class="input" name="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${s.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select>`)}
           ${field('Scan every', `${num('intervalSec', s.intervalSec, 2, 60)} <span class="dim">seconds</span>`)}
           ${field('Your data', `<button class="btn small" type="button" data-act="openDataFolder">Open data folder</button>`, `Settings, history and the alert log are kept in ${esc(state.app.dataDir)}`)}
@@ -909,7 +921,7 @@
   bridge.onOpenProgram((name) => { showTab('overview'); openDrawer(name); });
   (async () => {
     const res = await bridge.call('getState');
-    if (res && res.ok) { state = res.result; lastOk = Date.now(); } else failed = true;
+    if (res && res.ok) { state = res.result; lastOk = Date.now(); } else { failed = true; toast(res && res.error ? res.error : 'NetWatch is not running.', true); }
     const h = decodeURIComponent(location.hash.slice(1));
     if (h.startsWith('program=')) { showTab('overview', false); openDrawer(h.slice(8)); } else showTab(h || 'overview', false);
   })();

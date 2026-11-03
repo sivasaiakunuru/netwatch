@@ -1,7 +1,13 @@
 'use strict';
 // JSON files in the app's data folder, written atomically, plus a rotating alert log.
+// Everything here is private to the user running NetWatch: the folder is owner-only (0700) and files are
+// created owner-only (0600), since they hold browsing history, alerts and, in browser mode, phone-alert
+// credentials. (On Windows the user's profile folder is already private; the modes are ignored there.)
 const fs = require('fs');
 const path = require('path');
+
+const PRIVATE_DIR = 0o700;
+const PRIVATE_FILE = 0o600;
 
 const ALERT_LOG_MAX_BYTES = 5 * 1024 * 1024;
 const ALERT_LOG_KEEP = 3;
@@ -71,7 +77,9 @@ function sanitizeSettings(s) {
 class Store {
   constructor(dir) {
     this.dir = dir;
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR });
+    // A folder made by an older version (or by hand) may be readable by others: tighten it.
+    if (process.platform !== 'win32') { try { fs.chmodSync(dir, PRIVATE_DIR); } catch { /* not ours to change */ } }
   }
 
   file(name) { return path.join(this.dir, name); }
@@ -83,8 +91,15 @@ class Store {
   writeJson(name, data) {
     const target = this.file(name);
     const tmp = `${target}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.writeFileSync(tmp, JSON.stringify(data), { mode: PRIVATE_FILE });
     fs.renameSync(tmp, target);
+  }
+
+  /** Writes a small text file only the current user can read (replacing any earlier copy). */
+  writePrivateText(name, text) {
+    const target = this.file(name);
+    try { fs.unlinkSync(target); } catch { /* not there yet */ }
+    fs.writeFileSync(target, text, { mode: PRIVATE_FILE, flag: 'wx' });
   }
 
   loadSettings() { return sanitizeSettings(this.readJson('settings.json', {})); }
@@ -102,7 +117,7 @@ class Store {
         const oldest = this.file(`alerts.${ALERT_LOG_KEEP + 1}.jsonl`);
         if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
       }
-      fs.appendFileSync(log, `${JSON.stringify(alert)}\n`);
+      fs.appendFileSync(log, `${JSON.stringify(alert)}\n`, { mode: PRIVATE_FILE });
     } catch { /* logging must never break monitoring */ }
   }
 

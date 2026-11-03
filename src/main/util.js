@@ -150,7 +150,21 @@ function inDailyWindow(date, from, to) {
   return f < t ? now >= f && now < t : now >= f || now < t;
 }
 
+/**
+ * Whether a Windows folder is inside Program Files, which only administrators can change. Code that runs
+ * with admin rights without a prompt (the login task) must live there: an "only for me" install under
+ * AppData can be rewritten by any program running as the user.
+ */
+function isAdminOnlyInstallDir(dir, env = process.env) {
+  const norm = (p) => String(p || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  const target = norm(dir);
+  if (!target || target.includes('\\..')) return false;
+  return [env.ProgramW6432, env.ProgramFiles, env['ProgramFiles(x86)']]
+    .filter(Boolean).map(norm)
+    .some((root) => target === root || target.startsWith(`${root}\\`));
+}
+
 module.exports = {
   normalizeIp, isPublicIp, ipv4ToInt, parseIpv4Cidr, ipv6Groups, ipv6High64, formatIpv6,
-  entropy, looksRandomDomain, SEVERITY_RANK, dayKey, parseClock, inDailyWindow,
+  entropy, looksRandomDomain, SEVERITY_RANK, dayKey, parseClock, inDailyWindow, isAdminOnlyInstallDir,
 };

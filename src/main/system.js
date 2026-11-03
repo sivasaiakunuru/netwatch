@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
+const { isAdminOnlyInstallDir } = require('./util');
 
 const TASK_NAME = 'NetWatch';
 
@@ -36,6 +37,15 @@ async function windowsTaskExists() {
 async function setAutostart(enabled, admin, isAdmin) {
   const args = launchArgs(['--hidden']);
   if (process.platform === 'win32') {
+    // Check before changing anything, so a refused request leaves the current setup as it was.
+    if (enabled && admin) {
+      if (!isAdmin) throw new Error('To start with admin rights at login, first restart NetWatch as administrator, then turn this on.');
+      if (!app.isPackaged || !isAdminOnlyInstallDir(path.dirname(exePath()))) {
+        throw new Error('Starting with admin rights at login needs NetWatch installed for all users (in Program Files). '
+          + 'An "only for me" install can be changed by other programs on your account, which would then run with admin rights. '
+          + 'Reinstall NetWatch and choose "Anyone who uses this computer", or start it normally at login instead.');
+      }
+    }
     app.setLoginItemSettings({ openAtLogin: false, path: exePath(), args });
     if (await windowsTaskExists()) {
       try { await run('schtasks', ['/Delete', '/TN', TASK_NAME, '/F']); } catch (e) {
@@ -44,7 +54,6 @@ async function setAutostart(enabled, admin, isAdmin) {
     }
     if (!enabled) return;
     if (admin) {
-      if (!isAdmin) throw new Error('To start with admin rights at login, first restart NetWatch as administrator, then turn this on.');
       const tr = [quoteArg(exePath()), ...args.map(quoteArg)].join(' ');
       await run('schtasks', ['/Create', '/TN', TASK_NAME, '/TR', tr, '/SC', 'ONLOGON', '/RL', 'HIGHEST', '/F']);
     } else {
